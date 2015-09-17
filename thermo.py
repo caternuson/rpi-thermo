@@ -20,12 +20,19 @@ import RPi.GPIO as GPIO
 
 import Image, ImageDraw, ImageFont
 
-import time
+import mysql.connector
+
+import time, datetime
 
 current_time        = None
 current_temp        = None
 current_setpoint    = None
 is_heating          = False
+bmp180_temp         = None
+bmp180_press        = None 
+bmp180_alt          = None
+bmp180_slp          = None
+mcp9808_temp        = None
 temp_history        = 240*[None]
 
 #--------------------------------
@@ -79,6 +86,12 @@ font132 = ImageFont.truetype(FONT_PATH+FONT_FILE,132)
 font164 = ImageFont.truetype(FONT_PATH+FONT_FILE,164)
 
 #--------------------------------
+# Open Database Connection
+#--------------------------------
+cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+cursor = cnx.cursor()
+
+#--------------------------------
 # Functions
 #--------------------------------
 def CToF(degC):
@@ -91,26 +104,56 @@ def LEDOff():
     GPIO.output(LED_PIN, GPIO.LOW)
     
 def get_temperature():
-    bmp180_temp = bmp180.read_temperature()
-    mcp9808_temp = mcp9808.readTempC()
+    global bmp180_temp, mcp9808_temp
+    if (bmp180_temp==None) or (mcp9808_temp==None):
+     bmp180_temp = bmp180.read_temperature()
+     mcp9808_temp = mcp9808.readTempC()
     temp = 0.5 * (bmp180_temp + mcp9808_temp)
     temp = CToF(temp)
     return temp
 
+def read_sensors():
+    global bmp180_temp, bmp180_press, bmp180_alt, bmp180_slp, mcp9808_temp
+    bmp180_temp     = bmp180.read_temperature()             # deg C
+    bmp180_press    = bmp180.read_pressure()                # Pa 
+    bmp180_alt      = bmp180.read_altitude()                # m
+    bmp180_slp      = bmp180.read_sealevel_pressure()       # Pa
+    mcp9808_temp    = mcp9808.readTempC()                   # deg C
+
 def get_setpoint():
     return SET_POINT
 
+def update_state():
+    global current_time, current_temp, current_setpoint
+    read_sensors()
+    current_time = datetime.datetime.now()
+    current_temp = get_temperature()
+    curent_setpoint = get_setpoint()  
+
 def thermostat():
-    global current_temp
-    global current_setpoint
-    global is_heating
+    global current_temp, current_setpoint, is_heating
     if current_temp < current_setpoint:
         is_heating = True
         LEDOn()
     else:
         is_heating = False
         LEDOff()
+        
+def update_database():
+    global current_time, current_temp, current_setpoint, is_heating, \
+            bmp180_temp, bmp180_press, bmp180_alt, bmp180_slp, mcp9808_temp   
+    add_data = ("INSERT INTO data "
+                "(datetime, bmp180_temp, bmp180_press, bmp180_alt, bmp180_slp, mcp9808_temp, set_temp, thermostat) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)")
+    if is_heating:
+        state = 1
+    else:
+        state = 0
+    data = (current_time, bmp180_temp, bmp180_press, bmp180_alt, bmp180_slp, mcp9808_temp, current_setpoint, state)
+    cursor.execute(add_data, data)
+    cnx.commit()
 
+''' TODO: Delete this once database works    
 def update_temp_history():
     global current_temp
     global current_time
@@ -133,39 +176,50 @@ def update_temp_history():
         temp_history[i] = current_temp
     else:
         temp_history[i] = 0.5 * (temp + current_temp)
-        
+'''
+
 def plot_temp_history():
-    global temp_history
+    #global temp_history
     W = 240
     H = 120
     MAXT = 90.0
     MINT = 60.0
     plot = Image.new("RGB",(W,H),"black")
     plot_draw = ImageDraw.Draw(plot)
+    area = [(0,0),(W,H)]
     border = [(0,0),(W-1,0),(W-1,H-1),(0,H-1),(0,0)]
-    plot_draw.line(border,fill=(0,255,0),width=1)
+    grid_lines = [
+        [(int(W*0.25),0),(int(W*0.25),H)],
+        [(int(W*0.50),0),(int(W*0.50),H)],
+        [(int(W*0.75),0),(int(W*0.75),H)],
+        [(0,int(H/3.0)),(W,int(H/3.0))],
+        [(0,int(2*H/3.0)),(W,int(2*H/3.0))]
+    ]
+    ''' TODO: Get temp history info from the database
     points=[]
     for x,temp in enumerate(temp_history):
         if temp==None:
             continue
         y = H - int(H*(temp-MINT)/(MAXT-MINT))
         points.append((x,y))
-    plot_draw.point(points,fill=(0,255,0))
+    '''
+    plot_draw.rectangle(area,fill=(80,80,80))    
+    #plot_draw.line(points,fill=(0,255,255),width=3)
+    for grid in grid_lines:
+        plot_draw.line(grid,fill=(255,255,255),width=1)
+    plot_draw.line(border,fill=(255,255,255),width=1)
     return plot    
-    
-            
+               
 def clear_screen():
     screen_draw.rectangle(WHOLE_SCREEN, outline="black", fill="black")
 
 def update_display():
-    global current_temp
-    global current_setpoint
-    global current_time
+    global current_temp, current_setpoint, current_time
     
-    day = time.strftime("%a",current_time).upper()
-    mon = time.strftime("%b",current_time).upper()
-    line1 = day + " " + mon + " " + time.strftime("%d, %Y",current_time)
-    line2 = time.strftime("%I:%M %p",current_time)
+    day = current_time.strftime("%a").upper()
+    mon = current_time.strftime("%b").upper()
+    line1 = day + " " + mon + " " + current_time.strftime("%d, %Y")
+    line2 = current_time.strftime("%I:%M %p")
     line3 = "%2i" % (int(SET_POINT))
     line4 = "%2i" % (int(current_temp))
   
@@ -191,10 +245,12 @@ def update_display():
 # M A I N
 #==============================================
 while True:
-    current_time = time.localtime()
-    current_setpoint = get_setpoint()
-    current_temp = get_temperature()
-    thermostat()
-    update_temp_history()
-    update_display()
-    time.sleep(60)
+    #current_time = time.localtime()
+    #current_setpoint = get_setpoint()
+    #current_temp = get_temperature()
+    update_state()              # read sensors, determine current temp and setpoint
+    thermostat()                # take appropriate action based on state
+    update_database()           # add current data to database
+    #update_temp_history()
+    update_display()            # update the display
+    time.sleep(60)              # sleep for 1 minute
