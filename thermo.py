@@ -38,7 +38,7 @@ mcp9808_temp        = None
 #--------------------------------
 # Constants
 #--------------------------------
-SET_POINT       = 70.0
+#SET_POINT       = 70.0
 LED_PIN         = 22
 DC_PIN          = 18
 RST_PIN         = 23
@@ -101,14 +101,13 @@ def LEDOff():
     GPIO.output(LED_PIN, GPIO.LOW)
     
 def get_temperature():
-    """Return the current ambient temperature."""
+    """Return the current ambient temperature in Fahrenheit."""
     global bmp180_temp, mcp9808_temp
     if (bmp180_temp==None) or (mcp9808_temp==None):
      bmp180_temp = bmp180.read_temperature()
      mcp9808_temp = mcp9808.readTempC()
     temp = 0.5 * (bmp180_temp + mcp9808_temp)
-    temp = CToF(temp)
-    return temp
+    return CToF(temp)
 
 def read_sensors():
     """Read the current values from the attached sensors."""
@@ -121,7 +120,23 @@ def read_sensors():
 
 def get_setpoint():
     """Return the current temperature set point."""
-    return SET_POINT
+    cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+    cursor = cnx.cursor()
+    
+    get_set_point = ("SELECT temp FROM schedule "
+                     "WHERE (day*86400)+TIME_TO_SEC(time)<=(%s*86400)+TIME_TO_SEC(%s) "
+                     "ORDER BY day DESC,time DESC LIMIT 1")
+    
+    cursor.execute(get_set_point,(current_time.weekday(),current_time.time()))
+    set_point = None
+    for t in cursor:
+        set_point = float(t[0])
+    if set_point==None:
+        # not sure what to do, for now just set a sane value
+        set_point = 65.0
+    cursor.close()
+    cnx.close()
+    return set_point
 
 def update_state():
     """Update various global to current conditions."""
@@ -234,7 +249,7 @@ def update_display():
     mon = current_time.strftime("%b").upper()
     line1 = day + " " + mon + " " + current_time.strftime("%d, %Y")
     line2 = current_time.strftime("%I:%M %p")
-    line3 = "%2i" % (int(SET_POINT))
+    line3 = "%2i" % (int(current_setpoint))
     line4 = "%2i" % (int(current_temp))
   
     clear_screen()
