@@ -192,6 +192,35 @@ def get_temp_history(start_time=None, end_time=None):
     cnx.close()
     return data
 
+def get_daily_stats():
+    """Return tuple of daily min temp, max temp, total on time."""
+    cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+    cursor = cnx.cursor()
+    get_stats = ("SELECT MIN(bmp180_temp), MAX(bmp180_temp),SUM(thermostat) FROM data "
+                 "WHERE DATE(datetime)=DATE(%s)")
+    cursor.execute(get_stats, (current_time,))
+    data = None
+    for (mmin, mmax, tot) in cursor:
+        data = (CToF(mmin), CToF(mmax), float(tot))
+    cursor.close()
+    cnx.close()
+    return data
+
+def get_todays_sched():
+    """Return todays schedule as a list with tuples of (time, setpoint)."""
+    cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+    cursor = cnx.cursor()
+    get_sched = ("SELECT time,temp FROM schedule "
+                 "WHERE day=%s ORDER BY time")      
+    cursor.execute(get_sched, (current_time.weekday(),))   
+    data=[]
+    for (xtime, ytemp) in cursor:
+        # xtime will be returned as a timedelta, convert to time here
+        data.append(((datetime.min + xtime).time(), ytemp))
+    cursor.close()
+    cnx.close()    
+    return data
+
 def plot_temp_history():
     """Return a PIL image representing a temperature history."""
     W = 240
@@ -200,8 +229,14 @@ def plot_temp_history():
     MINT = 60.0
     plot = Image.new("RGB",(W,H),"black")
     plot_draw = ImageDraw.Draw(plot)
+    #--------------------------------
+    # BORDER AND BACKGROUND
+    #--------------------------------
     area = [(0,0),(W,H)]
     border = [(0,0),(W-1,0),(W-1,H-1),(0,H-1),(0,0)]
+    #--------------------------------
+    # GRID LINES
+    #--------------------------------
     grid_lines = [
         [(int(W*0.25),0),(int(W*0.25),H)],
         [(int(W*0.50),0),(int(W*0.50),H)],
@@ -209,11 +244,14 @@ def plot_temp_history():
         [(0,int(H/3.0)),(W,int(H/3.0))],
         [(0,int(2*H/3.0)),(W,int(2*H/3.0))]
     ]
+    #--------------------------------
+    # TEMPERATURE HISTORY
+    #--------------------------------
     # get data from database
-    data = get_temp_history()
+    temp_hist = get_temp_history()
     # map/compress temperature history to display size
     tmap=W*[None]
-    for (d,t) in data:
+    for (d,t) in temp_hist :
         if t==None:
             continue
         t = CToF(t)
@@ -223,15 +261,41 @@ def plot_temp_history():
         else:
             tmap[x]=0.5*(tmap[x]+t)
     # generate points from mapping        
-    points=[]
+    temp_points=[]
     for x,t in enumerate(tmap):
         if t==None:
             continue
         y = H - int(H*(t-MINT)/(MAXT-MINT))
-        points.append((x,y))
+        temp_points.append((x,y))
+    #--------------------------------
+    # DAILY SET POINTS
+    #
+    # NOTE: Currently not accurate. Doesn't handle looking back to previous day's value.
+    #--------------------------------
+    sched = get_todays_sched()
+    set_points=[]
+    for i,(xtime, ytemp) in enumerate(sched):
+        total_secs = xtime.hour*3600 + xtime.minute*60 + xtime.second
+        x = int(W * float(total_secs)/86400)
+        y = H - int(H*(ytemp-MINT)/(MAXT-MINT))
+        if i>0:
+            set_points.append((x,set_points[-1][1]))
+        set_points.append((x,y))
+            
+    if set_points[0][0] != 0:
+        set_points.insert(0, (0, set_points[0][1]))
+    if set_points[-1][0] != W:
+        set_points.append((W,set_points[-1][1]))
+    set_points.append((W,H))
+    set_points.append((0,H))
+    #--------------------------------
+    # DRAW STUFF
+    #--------------------------------       
     # draw items from bottom to top
-    plot_draw.rectangle(area,fill=(80,80,80))    
-    plot_draw.line(points,fill=(0,255,255),width=3)
+    plot_draw.rectangle(area,fill=(80,80,80))
+    #plot_draw.line(set_points,fill=(200,50,0), width=2)
+    plot_draw.polygon(set_points, fill=(200,80,80))
+    plot_draw.line(temp_points,fill=(0,255,255),width=3)
     for grid in grid_lines:
         plot_draw.line(grid,fill=(255,255,255),width=1)
     plot_draw.line(border,fill=(255,255,255),width=1)
@@ -245,18 +309,22 @@ def update_display():
     """Update the TFT display."""
     global current_temp, current_setpoint, current_time
     
+    (tmin, tmax, total_on) = get_daily_stats()
+    
     day = current_time.strftime("%a").upper()
     mon = current_time.strftime("%b").upper()
     line1 = day + " " + mon + " " + current_time.strftime("%d, %Y")
     line2 = current_time.strftime("%I:%M %p")
     line3 = "%2i" % (int(current_setpoint))
     line4 = "%2i" % (int(current_temp))
+    line5 = "MIN: %2i  MAX: %2i" % (int(tmin),int(tmax))
+    line6 = "TOT: %2i:%2i" % divmod(total_on,60)
   
     clear_screen()
     screen_draw.text((  1,  1),line1, font=font14, fill=(255,255,255))
     screen_draw.text((  1, 20),line2, font=font14, fill=(255,255,255))
     (w,h) = font36.getsize(line3)
-    x = SCREEN_WIDTH - w - 5
+    x = SCREEN_WIDTH - w - 1
     if is_heating:
         color = (255,0,0)
     else:
@@ -264,7 +332,11 @@ def update_display():
     screen_draw.text((  x,  1),line3, font=font36, fill=color)
     (w,h) = font164.getsize(line4)
     x = (SCREEN_WIDTH - w)/2
-    screen_draw.text((  x, 40),line4, font=font164, fill=(255,255,255))
+    screen_draw.text((  x, 28),line4, font=font164, fill=(255,255,255))
+    
+    (w,h) = font14.getsize(line6)
+    screen_draw.text((  1, 200-h),line5, font=font14, fill=(255,255,255))
+    screen_draw.text((SCREEN_WIDTH - w - 1, 200-h), line6, font=font14, fill=(255,255,255))
     
     screen.paste(plot_temp_history(),(0,200))
     
