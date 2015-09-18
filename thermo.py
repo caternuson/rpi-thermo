@@ -206,17 +206,16 @@ def get_daily_stats():
     cnx.close()
     return data
 
-def get_todays_sched():
-    """Return todays schedule as a list with tuples of (time, setpoint)."""
+def get_sched():
+    """Return the set point schedule from the database as list of tuples."""
     cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
     cursor = cnx.cursor()
-    get_sched = ("SELECT time,temp FROM schedule "
-                 "WHERE day=%s ORDER BY time")      
-    cursor.execute(get_sched, (current_time.weekday(),))   
+    get_sched = ("SELECT day,time,temp FROM schedule ORDER BY day,time") 
+    cursor.execute(get_sched)   
     data=[]
-    for (xtime, ytemp) in cursor:
+    for (day,xtime, ytemp) in cursor:
         # xtime will be returned as a timedelta, convert to time here
-        data.append(((datetime.min + xtime).time(), ytemp))
+        data.append((day,(datetime.min + xtime).time(), ytemp))
     cursor.close()
     cnx.close()    
     return data
@@ -269,23 +268,33 @@ def plot_temp_history():
         temp_points.append((x,y))
     #--------------------------------
     # DAILY SET POINTS
-    #
-    # NOTE: Currently not accurate. Doesn't handle looking back to previous day's value.
     #--------------------------------
-    sched = get_todays_sched()
+    sched = get_sched()
     set_points=[]
-    for i,(xtime, ytemp) in enumerate(sched):
-        total_secs = xtime.hour*3600 + xtime.minute*60 + xtime.second
-        x = int(W * float(total_secs)/86400)
-        y = H - int(H*(ytemp-MINT)/(MAXT-MINT))
-        if i>0:
-            set_points.append((x,set_points[-1][1]))
-        set_points.append((x,y))
-            
+    today=current_time.weekday()
+    # create polygon
+    for i,(iday, itime, itemp) in enumerate(sched):
+        if iday==today:    
+            total_secs = itime.hour*3600 + itime.minute*60 + itime.second
+            x = int(W * float(total_secs)/86400)
+            y = H - int(H*(itemp-MINT)/(MAXT-MINT))
+            # add previous y at current x to make squared edge polygon
+            if len(set_points)>0:
+                set_points.append((x,set_points[-1][1]))
+            set_points.append((x,y))
+    # fix left edge if needed        
     if set_points[0][0] != 0:
-        set_points.insert(0, (0, set_points[0][1]))
+        for i in xrange(len(sched)):
+            if sched[i][0]==today:
+                itemp = sched[i-1][2]
+                y = H - int(H*(itemp-MINT)/(MAXT-MINT))
+                set_points.insert(0,(0,y))
+                set_points.insert(1,(set_points[1][0],y))
+                break
+    # fix right edge if needed
     if set_points[-1][0] != W:
         set_points.append((W,set_points[-1][1]))
+    # square off the bottom of the polygon
     set_points.append((W,H))
     set_points.append((0,H))
     #--------------------------------
