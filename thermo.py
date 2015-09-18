@@ -22,7 +22,7 @@ import Image, ImageDraw, ImageFont
 
 import mysql.connector
 
-import time
+from time import sleep
 from datetime import datetime, timedelta
 
 current_time        = None
@@ -38,7 +38,6 @@ mcp9808_temp        = None
 #--------------------------------
 # Constants
 #--------------------------------
-#SET_POINT       = 70.0
 LED_PIN         = 22
 DC_PIN          = 18
 RST_PIN         = 23
@@ -104,8 +103,7 @@ def get_temperature():
     """Return the current ambient temperature in Fahrenheit."""
     global bmp180_temp, mcp9808_temp
     if (bmp180_temp==None) or (mcp9808_temp==None):
-     bmp180_temp = bmp180.read_temperature()
-     mcp9808_temp = mcp9808.readTempC()
+        read_sensors()
     temp = 0.5 * (bmp180_temp + mcp9808_temp)
     return CToF(temp)
 
@@ -122,11 +120,9 @@ def get_setpoint():
     """Return the current temperature set point."""
     cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
     cursor = cnx.cursor()
-    
     get_set_point = ("SELECT temp FROM schedule "
                      "WHERE (day*86400)+TIME_TO_SEC(time)<=(%s*86400)+TIME_TO_SEC(%s) "
-                     "ORDER BY day DESC,time DESC LIMIT 1")
-    
+                     "ORDER BY day DESC,time DESC LIMIT 1") 
     cursor.execute(get_set_point,(current_time.weekday(),current_time.time()))
     set_point = None
     for t in cursor:
@@ -145,17 +141,7 @@ def update_state():
     current_time = datetime.now()
     current_temp = get_temperature()
     current_setpoint = get_setpoint()  
-
-def thermostat():
-    """Take whatever action is necessary for the current state."""
-    global current_temp, current_setpoint, is_heating
-    if current_temp < current_setpoint:
-        is_heating = True
-        LEDOn()
-    else:
-        is_heating = False
-        LEDOff()
-        
+    
 def update_database():
     """Add current conditions to the MySQL database."""
     global current_time, current_temp, current_setpoint, is_heating, \
@@ -221,7 +207,7 @@ def get_sched():
     return data
 
 def plot_temp_history():
-    """Return a PIL image representing a temperature history."""
+    """Return a PIL image representing temperature history."""
     W = 240
     H = 120
     MAXT = 90.0
@@ -317,18 +303,24 @@ def clear_screen():
 def update_display():
     """Update the TFT display."""
     global current_temp, current_setpoint, current_time
-    
-    (tmin, tmax, total_on) = get_daily_stats()
-    
+    #--------------------------------
+    # COMPUTE STUFF
+    #--------------------------------    
+    (tmin, tmax, total_on) = get_daily_stats()    
     day = current_time.strftime("%a").upper()
     mon = current_time.strftime("%b").upper()
+    #--------------------------------
+    # CREATE TEXT MESSAGES
+    #--------------------------------
     line1 = day + " " + mon + " " + current_time.strftime("%d, %Y")
     line2 = current_time.strftime("%I:%M %p")
     line3 = "%2i" % (int(current_setpoint))
     line4 = "%2i" % (int(current_temp))
     line5 = "MIN: %2i  MAX: %2i" % (int(tmin),int(tmax))
-    line6 = "TOT: %2i:%2i" % divmod(total_on,60)
-  
+    line6 = "TOT: %2i:%02i" % divmod(total_on,60)
+    #--------------------------------
+    # DRAW TEXT MESSAGES
+    #--------------------------------
     clear_screen()
     screen_draw.text((  1,  1),line1, font=font14, fill=(255,255,255))
     screen_draw.text((  1, 20),line2, font=font14, fill=(255,255,255))
@@ -342,15 +334,28 @@ def update_display():
     (w,h) = font164.getsize(line4)
     x = (SCREEN_WIDTH - w)/2
     screen_draw.text((  x, 28),line4, font=font164, fill=(255,255,255))
-    
     (w,h) = font14.getsize(line6)
     screen_draw.text((  1, 200-h),line5, font=font14, fill=(255,255,255))
     screen_draw.text((SCREEN_WIDTH - w - 1, 200-h), line6, font=font14, fill=(255,255,255))
-    
+    #--------------------------------
+    # PASTE IN HISTORY PLOT
+    #--------------------------------    
     screen.paste(plot_temp_history(),(0,200))
-    
+    #--------------------------------
+    # DISPLAY IT
+    #--------------------------------     
     disp.display(screen)
 
+def thermostat():
+    """Take whatever action is necessary for the current state."""
+    global current_temp, current_setpoint, is_heating
+    if current_temp < current_setpoint:
+        is_heating = True
+        LEDOn()
+    else:
+        is_heating = False
+        LEDOff()
+        
 #==============================================
 # M A I N
 #==============================================
@@ -359,4 +364,4 @@ while True:
     thermostat()            # take appropriate action based on state
     update_database()       # add current data to database
     update_display()        # update the display
-    time.sleep(60)          # sleep for 1 minute
+    sleep(60)               # sleep for 1 minute
