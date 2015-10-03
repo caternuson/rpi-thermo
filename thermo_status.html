@@ -1,0 +1,46 @@
+<html>
+<head>
+<title>Thermostat Status</title>
+<style>
+* {
+    font-family: sans-serif;
+    font-size: 1em;
+    padding: 0px;
+    margin: 0px;
+    }
+table, tr, td {
+    border-collapse: collapse;
+    border: 1px solid black;
+}
+.setpoint {
+    font-size: 3em;
+    color: {{SETPOINT_COLOR}};
+}
+.current_temp {
+    font-size: 10em;
+    font-weight: bolder;
+    }
+</style>
+</head>
+
+<body>
+<center>
+<table>
+<tr>
+    <td align=left>{{DATE}}<br/>{{TIME}}<br/></td>
+    <td class='setpoint' align=right>{{SETPOINT}}</td>
+</tr>
+<tr>
+    <td class='current_temp' align=center colspan=2>{{CURRENT_TEMP}}</td>
+</tr>
+<tr>
+    <td align=left>MIN: {{TEMP_MIN}}   MAX: {{TEMP_MAX}}</td>
+    <td align=right>TOT: {{TOTAL_ON_TIME}}</td>
+</tr>
+<tr>
+    <td colspan=2><img src="{{TEMP_PLOT}}" id="temp_hist" width=800 height=500/></td>
+</tr>
+</table>
+</center>
+</body>    
+</html>
