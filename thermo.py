@@ -343,9 +343,10 @@ def update_display():
     #--------------------------------    
     screen.paste(plot_temp_history(),(0,200))
     #--------------------------------
-    # DISPLAY IT
-    #--------------------------------     
-    disp.display(screen)
+    # USE IT
+    #--------------------------------
+    screen.save("status.jpg", quality=95)   # save it
+    disp.display(screen)                    # display it
 
 def thermostat():
     """Take whatever action is necessary for the current state."""
