@@ -6,7 +6,6 @@
 #   * Heat only
 #   * left over RPi model A
 #   * Adafruit 2.2" TFT display
-#   * Adafruit BMP085 breakout board
 #   * Adafruit MCP9808 breakout board
 #
 # 2015-09-09
@@ -14,7 +13,6 @@
 #-------------------------------------------------------------------------
 import Adafruit_ILI9341 as TFT
 import Adafruit_GPIO.SPI as SPI
-import Adafruit_BMP.BMP085 as BMP085
 import Adafruit_MCP9808.MCP9808 as MCP9808
 
 import RPi.GPIO as GPIO
@@ -30,10 +28,6 @@ current_time        = None
 current_temp        = None
 current_setpoint    = None
 is_heating          = False
-bmp180_temp         = None
-bmp180_press        = None 
-bmp180_alt          = None
-bmp180_slp          = None
 mcp9808_temp        = None
 
 #--------------------------------
@@ -51,6 +45,13 @@ SCREEN_HEIGHT   = 320
 WHOLE_SCREEN    = ((0,0),(SCREEN_WIDTH,SCREEN_HEIGHT))
 
 #--------------------------------
+# MySQL config
+#--------------------------------
+MYSQL_ID = "thermo"
+MYSQL_PW = "thermo"
+MYSQL_DB = "thermo_data"
+
+#--------------------------------
 # GPIO Init
 #--------------------------------
 GPIO.setmode(GPIO.BCM)
@@ -59,7 +60,6 @@ GPIO.setup(LED_PIN, GPIO.OUT, initial=GPIO.LOW)
 #--------------------------------
 # Sensor Init
 #--------------------------------
-bmp180  = BMP085.BMP085()
 mcp9808 = MCP9808.MCP9808()
 mcp9808.begin()
 
@@ -102,24 +102,19 @@ def LEDOff():
     
 def get_temperature():
     """Return the current ambient temperature in Fahrenheit."""
-    global bmp180_temp, mcp9808_temp
-    if (bmp180_temp==None) or (mcp9808_temp==None):
+    global mcp9808_temp
+    if mcp9808_temp==None:
         read_sensors()
-    temp = 0.5 * (bmp180_temp + mcp9808_temp)
-    return CToF(temp)
+    return CToF(mcp9808_temp)
 
 def read_sensors():
-    """Read the current values from the attached sensors."""
-    global bmp180_temp, bmp180_press, bmp180_alt, bmp180_slp, mcp9808_temp
-    bmp180_temp     = bmp180.read_temperature()             # deg C
-    bmp180_press    = bmp180.read_pressure()                # Pa 
-    bmp180_alt      = bmp180.read_altitude()                # m
-    bmp180_slp      = bmp180.read_sealevel_pressure()       # Pa
-    mcp9808_temp    = mcp9808.readTempC()                   # deg C
+    """Read the current values from the attached sensor(s)."""
+    global mcp9808_temp
+    mcp9808_temp = mcp9808.readTempC()                   # deg C
 
 def get_setpoint():
     """Return the current temperature set point."""
-    cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+    cnx = mysql.connector.connect(user=MYSQL_ID, password=MYSQL_PW, database=MYSQL_DB)
     cursor = cnx.cursor()
     get_set_point = ("SELECT temp FROM schedule "
                      "WHERE (day*86400)+TIME_TO_SEC(time)<=(%s*86400)+TIME_TO_SEC(%s) "
@@ -146,15 +141,15 @@ def update_state():
 def update_database():
     """Add current conditions to the MySQL database."""
     global current_time, current_temp, current_setpoint, is_heating, \
-            bmp180_temp, bmp180_press, bmp180_alt, bmp180_slp, mcp9808_temp
+           mcp9808_temp
     
-    cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+    cnx = mysql.connector.connect(user=MYSQL_ID, password=MYSQL_PW, database=MYSQL_DB)
     cursor = cnx.cursor()
     add_data = ("INSERT INTO data "
-                "(datetime, bmp180_temp, bmp180_press, bmp180_alt, bmp180_slp, mcp9808_temp, set_temp, thermostat) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)")
+                "(datetime, mcp9808_temp, set_temp, thermostat) "
+                "VALUES (%s, %s, %s, %s)")
     state = 1 if is_heating else 0
-    data = (current_time, bmp180_temp, bmp180_press, bmp180_alt, bmp180_slp, mcp9808_temp, current_setpoint, state)
+    data = (current_time, mcp9808_temp, current_setpoint, state)
     cursor.execute(add_data, data)
     cnx.commit()
     cursor.close()
@@ -162,14 +157,14 @@ def update_database():
     
 def get_temp_history(start_time=None, end_time=None):
     """Retrieve temperature history from the MySQL database."""
-    cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+    cnx = mysql.connector.connect(user=MYSQL_ID, password=MYSQL_PW, database=MYSQL_DB)
     cursor = cnx.cursor()
     if end_time==None:
         end_time=current_time
     if start_time==None:
         start_time=datetime(current_time.year, current_time.month, current_time.day,
                             0, 0, 0, 0) 
-    get_data = ("SELECT datetime, bmp180_temp FROM data "
+    get_data = ("SELECT datetime, mcp9808_temp FROM data "
                 "WHERE datetime BETWEEN %s AND %s")
     cursor.execute(get_data, (start_time, end_time))
     data=[]
@@ -181,9 +176,9 @@ def get_temp_history(start_time=None, end_time=None):
 
 def get_daily_stats():
     """Return tuple of daily min temp, max temp, total on time."""
-    cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+    cnx = mysql.connector.connect(user=MYSQL_ID, password=MYSQL_PW, database=MYSQL_DB)
     cursor = cnx.cursor()
-    get_stats = ("SELECT MIN(bmp180_temp), MAX(bmp180_temp),SUM(thermostat) FROM data "
+    get_stats = ("SELECT MIN(mcp9808_temp), MAX(mcp9808_temp),SUM(thermostat) FROM data "
                  "WHERE DATE(datetime)=DATE(%s)")
     cursor.execute(get_stats, (current_time,))
     data = None
@@ -195,7 +190,7 @@ def get_daily_stats():
 
 def get_sched():
     """Return the set point schedule from the database as list of tuples."""
-    cnx = mysql.connector.connect(user='thermo', password='thermo', database='thermo_test')
+    cnx = mysql.connector.connect(user=MYSQL_ID, password=MYSQL_PW, database=MYSQL_DB)
     cursor = cnx.cursor()
     get_sched = ("SELECT day,time,temp FROM schedule ORDER BY day,time") 
     cursor.execute(get_sched)   
