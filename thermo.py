@@ -20,6 +20,7 @@ import RPi.GPIO as GPIO
 import Image, ImageDraw, ImageFont
 
 import mysql.connector
+import socket
 
 from time import sleep
 from datetime import datetime, timedelta
@@ -29,6 +30,7 @@ current_temp        = None
 current_setpoint    = None
 is_heating          = False
 mcp9808_temp        = None
+current_OAT         = None
 
 #--------------------------------
 # Constants
@@ -90,7 +92,7 @@ font164 = ImageFont.truetype(FONT_PATH+FONT_FILE,164)
 #--------------------------------
 def CToF(degC):
     """Return the Centigrade value in degrees Fahrenheit."""
-    return 32.0 + (degC * 9.0)/5.0
+    return 32.0 + 1.8 * degC
 
 def LEDOn():
     """Turn on the LED."""
@@ -100,17 +102,28 @@ def LEDOff():
     """Turn off the LED."""
     GPIO.output(LED_PIN, GPIO.LOW)
     
+def get_OAT():
+    """Get outside air temperature in Fahrenheit."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect(('192.168.1.91',65050))
+        s.send('GCT')
+        data = s.recv(1024)
+        temp = float(data)
+    except (socket.error, ValueError):
+        return -999.0
+    else:
+        return temp
+    
 def get_temperature():
     """Return the current ambient temperature in Fahrenheit."""
-    global mcp9808_temp
-    if mcp9808_temp==None:
-        read_sensors()
-    return CToF(mcp9808_temp)
+    read_sensors()
+    return mcp9808_temp
 
 def read_sensors():
     """Read the current values from the attached sensor(s)."""
     global mcp9808_temp
-    mcp9808_temp = mcp9808.readTempC()                   # deg C
+    mcp9808_temp = CToF(mcp9808.readTempC())
 
 def get_setpoint():
     """Return the current temperature set point."""
@@ -132,24 +145,25 @@ def get_setpoint():
 
 def update_state():
     """Update various global to current conditions."""
-    global current_time, current_temp, current_setpoint
+    global current_time, current_temp, current_setpoint, current_OAT
     read_sensors()
     current_time = datetime.now()
     current_temp = get_temperature()
-    current_setpoint = get_setpoint()  
+    current_setpoint = get_setpoint()
+    current_OAT = get_OAT()
     
 def update_database():
     """Add current conditions to the MySQL database."""
-    global current_time, current_temp, current_setpoint, is_heating, \
-           mcp9808_temp
-    
+    global current_time, current_temp, current_setpoint, current_OAT , \
+           is_heating, mcp9808_temp
+    update_state()    
     cnx = mysql.connector.connect(user=MYSQL_ID, password=MYSQL_PW, database=MYSQL_DB)
     cursor = cnx.cursor()
     add_data = ("INSERT INTO data "
-                "(datetime, mcp9808_temp, set_temp, thermostat) "
-                "VALUES (%s, %s, %s, %s)")
+                "(datetime, mcp9808_temp, OAT, set_temp, thermostat) "
+                "VALUES (%s, %s, %s, %s, %s)")
     state = 1 if is_heating else 0
-    data = (current_time, mcp9808_temp, current_setpoint, state)
+    data = (current_time, mcp9808_temp, current_OAT, current_setpoint, state)
     cursor.execute(add_data, data)
     cnx.commit()
     cursor.close()
@@ -235,7 +249,6 @@ def plot_temp_history():
     for (d,t) in temp_hist :
         if t==None:
             continue
-        t = CToF(t)
         x = int(W * float(d.hour*3600+d.minute*60+d.second)/86400)
         if tmap[x]==None:
             tmap[x]=t
