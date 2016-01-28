@@ -376,7 +376,7 @@ def update_display():
     #--------------------------------
     # USE IT
     #--------------------------------
-    screen.save("status.jpg", quality=95)   # save it
+    screen.save("/home/pi/rpi-thermo/status.jpg", quality=95)   # save it
     disp.display(screen)                    # display it
 
 def thermostat():
