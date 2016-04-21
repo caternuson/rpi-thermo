@@ -116,10 +116,11 @@ def get_OAT():
         s.send('GCT')
         data = s.recv(1024)
         temp = float(data)
+        return temp
     except (socket.error, ValueError):
         return -999.0
-    else:
-        return temp
+    except:
+        return -999.0 
     
 def get_temperature():
     """Return the current ambient temperature in Fahrenheit."""
